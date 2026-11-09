@@ -1,0 +1,18 @@
+{
+  "name": "attributor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "First-publication records and consensus copy attestations: validators read a page against a registered text, the contract scores it.",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "python -m pytest tests/direct -q",
+    "deploy": "node scripts/deploy_studionet.js",
+    "e2e": "node scripts/e2e_studionet.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "genlayer-js": "1.1.8"
+  }
+}

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Attributor — who published it first, and who copied it</title>
+<meta name="description" content="Register a text on chain with its publication time, then let GenLayer validators read another page and report how much of it is the registered text. The score and status are computed by code." />
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --ink:#1c2430; --muted:#697586; --line:#e2e6ec;
+    --accent:#2f5fd0; --ok:#1f7a4d; --warn:#9a5b00; --bad:#a32b2b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:26px 20px 80px}
+  header.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.01em;font-size:19px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--ok)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-size:12.5px;color:var(--muted)}
+  .chip b{color:var(--ink);font-weight:600}
+  h2{font-size:15px;font-weight:650;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .grid{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start}
+  @media(max-width:920px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .stat span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .stat b{font-size:19px;font-weight:650}
+  label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+  input,textarea,select{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+    font:inherit;color:var(--ink);background:#fff}
+  textarea{min-height:70px;resize:vertical}
+  input:focus,textarea:focus,select:focus{outline:2px solid #cdd9f5;border-color:#b9c9ee}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:700px){.row{grid-template-columns:1fr}}
+  button{font:inherit;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink);
+    padding:9px 13px;cursor:pointer}
+  button:hover{border-color:#c9d2e2}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.small{padding:6px 10px;font-size:13px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .work{border:1px solid var(--line);border-radius:12px;background:#fff;padding:16px;margin-bottom:12px}
+  .work h3{margin:0 0 6px;font-size:15px;font-weight:650}
+  .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  .pill{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:#fbfcfd}
+  .pill.clear{color:var(--ok);border-color:#cfe8db;background:#f1faf5}
+  .pill.review{color:var(--warn);border-color:#f0dfc2;background:#fdf8ef}
+  .pill.near_copy{color:var(--bad);border-color:#f0cfd0;background:#fdf1f1}
+  .pill.verbatim{color:#fff;background:var(--bad);border-color:var(--bad)}
+  .kv{font-size:13px;color:var(--muted);margin:3px 0}
+  .kv b{color:var(--ink);font-weight:600}
+  .excerpt{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;color:var(--muted);font-size:13px}
+  .text{font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;color:#3a4553;
+    background:#fbfcfd;border:1px solid var(--line);border-radius:8px;padding:10px;
+    max-height:120px;overflow:auto;white-space:pre-wrap}
+  #log{display:none;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+    background:#1c2430;color:#fff;padding:9px 16px;border-radius:999px;font-size:13px;
+    max-width:88vw;z-index:50}
+  .side{position:sticky;top:18px}
+  .steps{font-size:13px;color:var(--muted);margin:0;padding-left:18px}
+  .steps li{margin:6px 0}
+  .links a{display:block;font-size:13px;margin:4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="dot"></span> Attributor</div>
+    <div class="chips">
+      <span class="chip">contract <a id="contractlink" target="_blank" rel="noreferrer"></a></span>
+      <span class="chip" id="walletchip">key</span>
+      <select id="acting" style="width:auto;padding:6px 10px;font-size:12.5px"></select>
+      <button class="small" id="genkey">New key</button>
+      <button class="small" id="importkey">Import</button>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><span>works</span><b id="s-works">0</b></div>
+    <div class="stat"><span>attestations</span><b id="s-attest">0</b></div>
+    <div class="stat"><span>near copies</span><b id="s-near">0</b></div>
+    <div class="stat"><span>verbatim</span><b id="s-verbatim">0</b></div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Register a text</h2>
+        <p class="sub">The contract stores the text, its title and the URL where it was published. The block time is the first-publication record. Anyone can later point at another page and ask validators how much of it is this text.</p>
+        <div class="row">
+          <div><label for="wid">work id</label><input id="wid" placeholder="essay-2026-11" /></div>
+          <div><label for="wurl">published URL</label><input id="wurl" placeholder="https://your.site/page" /></div>
+        </div>
+        <label for="wtitle">title</label><input id="wtitle" placeholder="Why glossaries fail at midnight" />
+        <label for="wtext">text (120–4000 characters)</label>
+        <textarea id="wtext" rows="7" placeholder="Paste the text you published."></textarea>
+        <div class="actions">
+          <button class="primary" id="register">Register on chain</button>
+          <button id="sample">Load a demo text</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Works</h2>
+        <p class="sub">Newest first. Attesting a page costs a consensus round; the contract stores the category, the overlap bucket, the score it computes, and a short verbatim excerpt.</p>
+        <div id="works"></div>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="card">
+        <h2>How the reading works</h2>
+        <ol class="steps">
+          <li>Validators fetch the suspect page and read it against the registered text.</li>
+          <li>They answer one category (verbatim, near copy, derivative, unrelated) and one overlap bucket (none, low, medium, high, full).</li>
+          <li>The round only settles when both agree on those two values; wording and excerpt are free.</li>
+          <li>The contract maps the pair to a score and a status: 100 verbatim, 85 near copy, 50 review, 0 clear.</li>
+        </ol>
+      </div>
+      <div class="card links">
+        <h2>Demo pages</h2>
+        <a href="/demo/work.html" target="_blank">the registered text</a>
+        <a href="/demo/copy.html" target="_blank">a near copy of it</a>
+        <a href="/demo/unrelated.html" target="_blank">an unrelated page</a>
+      </div>
+      <div class="card">
+        <h2>What it is not</h2>
+        <p class="sub" style="margin:0">A registration is evidence, not a copyright, and a status is a computed label, not a legal finding. It records that this text existed at this time and how a validator set read that page.</p>
+      </div>
+    </aside>
+  </div>
+</div>
+<div id="log"></div>
+<script src="./bundle.js"></script>
+</body>
+</html>
