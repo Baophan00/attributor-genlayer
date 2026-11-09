@@ -226,7 +226,10 @@ async function refresh() {
     if (!works.length) box.append(el("div", "kv", "no works registered yet"));
     works.forEach((work) => box.append(workCard(work)));
   } catch (e) {
-    $("works").replaceChildren(el("div", "kv", String((e && e.message) || e).slice(0, 180)));
+    setTimeout(refresh, 3000);
+    if (!$("works").childElementCount) {
+      $("works").replaceChildren(el("div", "kv", String((e && e.message) || e).slice(0, 180)));
+    }
   }
 }
 
