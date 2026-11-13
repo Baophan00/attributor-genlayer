@@ -1,7 +1,7 @@
 import { createClient, createAccount, generatePrivateKey } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 
-const CONTRACT = "0xeCC5d8c7cD8665A625C86B73b895b98225b12E24";
+const CONTRACT = "0x1Ebb54c18e83F980f004E2FD1eCFc352d769eE75";
 const EXPLORER = `https://explorer-studio.genlayer.com/address/${CONTRACT}`;
 const KEY_SLOT = "attributor.keys";
 
@@ -49,6 +49,7 @@ function useKey(i) {
   me = String(account.address);
   client = createClient({ chain: studionet, account });
   paintKey();
+  paintProof();
   refresh();
 }
 
@@ -64,10 +65,29 @@ function paintKey() {
   $("walletchip").textContent = `key ${active + 1} · ${short(me)}`;
 }
 
+function proofLine() {
+  return `attributor:owner=${me.toLowerCase()}`;
+}
+
+function paintProof() {
+  const node = $("proof");
+  if (node) node.textContent = proofLine();
+}
+
 $("contractlink").textContent = short(CONTRACT);
 $("contractlink").href = EXPLORER;
 paintKey();
+paintProof();
 $("acting").onchange = (e) => useKey(Number(e.target.value) || 0);
+$("wid").addEventListener("input", paintProof);
+$("copyproof").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(proofLine());
+    log("proof line copied — paste it into the page, publish, then register");
+  } catch {
+    log(proofLine());
+  }
+};
 $("genkey").onclick = () => {
   keys.push(generatePrivateKey());
   localStorage.setItem(KEY_SLOT, JSON.stringify(keys));
@@ -112,7 +132,9 @@ async function send(functionName, args) {
   const receipt = await client.waitForTransactionReceipt({ hash, status: "FINALIZED", retries: 240, interval: 3000 });
   const leader = (receipt && receipt.consensus_data && receipt.consensus_data.leader_receipt) || [];
   if (String(leader[0] && leader[0].execution_result).toUpperCase() === "ERROR") {
-    throw new Error("the contract refused this call");
+    const detail =
+      (leader[0] && leader[0].genvm_result && (leader[0].genvm_result.stderr || leader[0].genvm_result.stdout)) || "";
+    throw new Error(detail ? String(detail).slice(0, 300) : "the contract refused this call");
   }
   log(`${functionName}: done`);
   await refresh();
@@ -155,8 +177,47 @@ async function history(card, workId) {
           `#${row.seq} · ${row.category.replace("_", " ")} · ${row.overlap} · score ${row.score} · ${short(row.caller)} · ${row.suspect_url}`
         )
       );
+      if (row.claimed) {
+        line.append(document.createTextNode(" · "));
+        line.append(el("span", "pill claimed", "claimed"));
+      } else if (row.status === "near_copy" || row.status === "verbatim") {
+        const claim = el("button", "", "Claim");
+        claim.onclick = async () => {
+          claim.disabled = true;
+          try {
+            await send("claim_copy", [workId, row.seq]);
+          } catch (e) {
+            log(String((e && e.message) || e).slice(0, 160));
+            claim.disabled = false;
+          }
+        };
+        line.append(document.createTextNode(" · "));
+        line.append(claim);
+      }
       box.append(line);
       if (row.excerpt) box.append(el("div", "excerpt", `“${row.excerpt}”`));
+    }
+  } catch (e) {
+    box.append(el("div", "kv", String((e && e.message) || e).slice(0, 160)));
+  }
+}
+
+async function challengeHistory(card, workId) {
+  const box = el("div", "");
+  card.append(box);
+  try {
+    const rows = await read("challenges_of", [workId]);
+    if (!rows.length) box.append(el("div", "kv", "no challenges yet"));
+    for (const row of rows) {
+      box.append(
+        el(
+          "div",
+          "kv",
+          `#${row.seq} · ${row.verdict} · ${short(row.challenger)} · ${row.evidence_url}`
+        )
+      );
+      if (row.reason) box.append(el("div", "excerpt", `“${row.reason}”`));
+      if (row.note) box.append(el("div", "kv", `note: ${row.note}`));
     }
   } catch (e) {
     box.append(el("div", "kv", String((e && e.message) || e).slice(0, 160)));
@@ -169,10 +230,28 @@ function workCard(work) {
   meta.append(statusPill(work.status));
   meta.append(el("span", "pill", `${work.attestations} round${work.attestations === 1 ? "" : "s"}`));
   meta.append(el("span", "pill", `${work.chars} chars`));
+  meta.append(el("span", `pill ${work.verified ? "verified" : ""}`, work.verified ? "verified" : "unverified"));
+  if (work.revoked) meta.append(el("span", "pill revoked", "revoked"));
+  if (work.claims) meta.append(el("span", "pill claimed", `${work.claims} claimed`));
+  if (work.challenges) meta.append(el("span", "pill", `${work.challenges} challenge${work.challenges === 1 ? "" : "s"}`));
   card.append(meta);
   card.append(el("h3", "", `${work.title}`));
   card.append(el("div", "kv", `id ${work.id} · by ${short(work.owner)} · registered ${new Date(work.created_at * 1000).toLocaleString()}`));
   card.append(el("div", "kv", `published at ${work.url}`));
+  card.append(
+    el(
+      "div",
+      "kv",
+      `proof ${work.proof_kind || "none"} · text ${short(work.text_digest)} · verified ${
+        work.verified_at ? new Date(work.verified_at * 1000).toLocaleString() : "no"
+      }`
+    )
+  );
+  if (work.revoked) {
+    card.append(
+      el("div", "kv", `revoked by ${short(work.revoked_by)} · ${work.revoked_reason}`)
+    );
+  }
   const text = el("div", "text", work.text);
   card.append(text);
   if (work.checked) {
@@ -207,6 +286,33 @@ function workCard(work) {
     (() => {
       const b = el("button", "", "Rounds");
       b.onclick = () => history(card, work.id);
+      return b;
+    })()
+  );
+  actions.append(
+    (() => {
+      const b = el("button", "", "Challenges");
+      b.onclick = () => challengeHistory(card, work.id);
+      return b;
+    })()
+  );
+  actions.append(
+    (() => {
+      const b = el("button", "", "Challenge");
+      b.title = "Contest this record with an earlier page";
+      b.onclick = async () => {
+        const url = prompt("Evidence URL (a different page that shows an earlier publication):");
+        if (!url) return;
+        const reason = prompt("Why should this record be revoked? (at least 20 characters)");
+        if (!reason) return;
+        b.disabled = true;
+        try {
+          await send("challenge_work", [work.id, url.trim(), reason.trim()]);
+        } catch (e) {
+          log(String((e && e.message) || e).slice(0, 160));
+          b.disabled = false;
+        }
+      };
       return b;
     })()
   );

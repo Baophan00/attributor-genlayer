@@ -4,14 +4,18 @@
         --with pytest --with genlayer-test pytest tests/direct -q
 
 The page and the model are mocked; the contract is not: the same parsing,
-scoring and history code the validators run is exercised here.
+scoring, proof and history code the validators run is exercised here.
 """
 
+import hashlib
 import json
 
 CONTRACT = "contracts/attributor.py"
 PROMPT = r"comparing a registered text"
+CHALLENGE_PROMPT = r"dispute about a first-publication record"
 SUSPECT = "https://copy.example.org/page"
+ORIGIN = "https://origin.example.org/page"
+EVIDENCE = "https://evidence.example.org/page"
 
 WORK_TEXT = (
     "The quiet failure of every translation memory is that it remembers words and "
@@ -28,6 +32,10 @@ def who(addr):
     return str(Address(bytes(addr)))
 
 
+def proof_for(sender):
+    return f"attributor:owner={who(sender).lower()}"
+
+
 def deploy(direct_deploy):
     return direct_deploy(CONTRACT)
 
@@ -37,9 +45,12 @@ def mock(direct_vm, payload, pattern=PROMPT):
 
 
 def registered(contract, direct_vm, sender, work_id="essay-1", text=WORK_TEXT):
+    direct_vm.clear_mocks()
+    page = f"{text}\n\nPublished by the author.\n\n{proof_for(sender)}"
+    direct_vm.mock_web(r"origin\.example\.org", {"status": 200, "body": page})
     direct_vm.sender = sender
     return contract.register_work(
-        work_id, "Why glossaries fail at midnight", text, "https://origin.example.org/page"
+        work_id, "Why glossaries fail at midnight", text, ORIGIN
     )
 
 
@@ -51,8 +62,23 @@ def attest(contract, direct_vm, sender, payload, suspect=SUSPECT, page="the copi
     return contract.attest_copy(work_id, suspect)
 
 
+def challenge(contract, direct_vm, sender, payload, work_id="essay-1", reason=None):
+    direct_vm.clear_mocks()
+    direct_vm.mock_web(r"origin\.example\.org", {"status": 200, "body": WORK_TEXT + " (original page)"})
+    direct_vm.mock_web(r"evidence\.example\.org", {"status": 200, "body": "Published January 2, 2026 by the same author."})
+    mock(direct_vm, payload, pattern=CHALLENGE_PROMPT)
+    direct_vm.sender = sender
+    return contract.challenge_work(
+        work_id, EVIDENCE, reason or "This text was published earlier at another URL by the same author."
+    )
+
+
 def verdict(category="near_copy", overlap="high", excerpt="a matched sentence", reason="same argument"):
     return {"category": category, "overlap": overlap, "excerpt": excerpt, "reason": reason}
+
+
+def challenge_verdict(value="upheld", note="the evidence shows an earlier publication"):
+    return {"verdict": value, "note": note}
 
 
 class TestRegister:
@@ -63,8 +89,10 @@ class TestRegister:
         assert out["work_id"] == "essay-1"
         assert out["owner"] == who(direct_alice)
         assert out["chars"] == len(WORK_TEXT)
-        assert out["published_url"] == "https://origin.example.org/page"
+        assert out["published_url"] == ORIGIN
         assert out["created_at"] > 0
+        assert out["verified"] is True
+        assert out["proof_kind"] == "page_token"
 
         work = contract.get_work("essay-1")
         assert work["title"] == "Why glossaries fail at midnight"
@@ -72,7 +100,41 @@ class TestRegister:
         assert work["attestations"] == 0
         assert work["status"] == ""
         assert work["checked"] is False
+        assert work["verified"] is True
+        assert work["revoked"] is False
+        assert work["challenges"] == 0
         assert contract.stats()["works"] == 1
+
+    def test_the_proof_digest_and_text_digest_are_stored(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+
+        work = contract.get_work("essay-1")
+        proof = proof_for(direct_alice)
+        assert work["proof_digest"] == hashlib.sha256(" ".join(proof.split()).encode()).hexdigest()
+        assert work["text_digest"] == hashlib.sha256(" ".join(WORK_TEXT.split()).encode()).hexdigest()
+        assert work["verified_at"] > 0
+
+    def test_registration_requires_the_text_on_the_page(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        direct_vm.clear_mocks()
+        page = "A page that does not contain the registered article.\n\n" + proof_for(direct_alice)
+        direct_vm.mock_web(r"origin\.example\.org", {"status": 200, "body": page})
+        direct_vm.sender = direct_alice
+
+        with direct_vm.expect_revert("not found on the published page"):
+            contract.register_work("no-text", "A title", WORK_TEXT, ORIGIN)
+        assert contract.stats()["works"] == 0
+
+    def test_registration_requires_the_owner_proof(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        direct_vm.clear_mocks()
+        direct_vm.mock_web(r"origin\.example\.org", {"status": 200, "body": WORK_TEXT})
+        direct_vm.sender = direct_alice
+
+        with direct_vm.expect_revert("owner proof line was not found"):
+            contract.register_work("essay-1", "A title", WORK_TEXT, ORIGIN)
+        assert contract.stats()["works"] == 0
 
     def test_a_work_id_is_single_use(self, direct_vm, direct_deploy, direct_alice):
         contract = deploy(direct_deploy)
@@ -80,6 +142,12 @@ class TestRegister:
 
         with direct_vm.expect_revert("is taken"):
             registered(contract, direct_vm, direct_alice)
+
+    def test_a_work_id_must_be_token_safe(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        direct_vm.sender = direct_alice
+        with direct_vm.expect_revert("may use letters"):
+            contract.register_work("bad id;", "A title", WORK_TEXT, ORIGIN)
 
     def test_short_text_is_refused(self, direct_vm, direct_deploy, direct_alice):
         contract = deploy(direct_deploy)
@@ -92,6 +160,76 @@ class TestRegister:
         direct_vm.sender = direct_alice
         with direct_vm.expect_revert("not an http"):
             contract.register_work("w", "A title", WORK_TEXT, "origin.example.org")
+
+    def test_the_same_text_cannot_be_registered_twice(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice, "a1")
+        direct_vm.sender = direct_bob
+
+        with direct_vm.expect_revert("already registered"):
+            contract.register_work("b1", "Another title", WORK_TEXT, "https://b.example.org/page")
+        assert contract.stats()["works"] == 1
+
+
+class TestChallenge:
+    def test_a_stranger_can_revoke_a_false_record(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+
+        out = challenge(contract, direct_vm, direct_bob, challenge_verdict("upheld"))
+        assert out["verdict"] == "upheld"
+        assert out["revoked"] is True
+        assert out["challenger"] == who(direct_bob)
+
+        work = contract.get_work("essay-1")
+        assert work["revoked"] is True
+        assert work["revoked_by"] == who(direct_bob)
+        assert work["revoked_reason"]
+        assert work["challenges"] == 1
+
+        history = contract.challenges_of("essay-1")
+        assert len(history) == 1
+        assert history[0]["verdict"] == "upheld"
+        assert history[0]["evidence_url"] == EVIDENCE
+
+    def test_a_revoked_work_cannot_be_attested(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+        challenge(contract, direct_vm, direct_bob, challenge_verdict("upheld"))
+
+        with direct_vm.expect_revert("revoked"):
+            contract.attest_copy("essay-1", SUSPECT)
+
+    def test_a_revoked_work_frees_the_text_for_the_real_author(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+        challenge(contract, direct_vm, direct_bob, challenge_verdict("upheld"))
+
+        out = registered(contract, direct_vm, direct_bob, "b1")
+        assert out["work_id"] == "b1"
+        assert contract.stats()["works"] == 2
+        assert contract.stats()["revoked"] == 1
+        assert contract.get_work("b1")["revoked"] is False
+
+    def test_the_owner_cannot_challenge_their_own_record(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+        direct_vm.sender = direct_alice
+
+        with direct_vm.expect_revert("owner cannot challenge"):
+            contract.challenge_work("essay-1", EVIDENCE, "This text was published earlier at another URL.")
+
+    def test_a_rejected_challenge_keeps_the_record(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+        out = challenge(contract, direct_vm, direct_bob, challenge_verdict("rejected", "no earlier publication found"))
+
+        assert out["verdict"] == "rejected"
+        assert out["revoked"] is False
+        work = contract.get_work("essay-1")
+        assert work["revoked"] is False
+        assert work["challenges"] == 1
+        assert contract.challenges_of("essay-1")[0]["verdict"] == "rejected"
 
 
 class TestAttest:
@@ -108,6 +246,7 @@ class TestAttest:
         assert out["status"] == "near_copy"
         assert out["caller"] == who(direct_bob)
         assert out["excerpt"] == "a matched sentence"
+        assert out["claimed"] is False
 
         work = contract.get_work("essay-1")
         assert work["attestations"] == 1
@@ -148,7 +287,7 @@ class TestAttest:
         registered(contract, direct_vm, direct_alice)
         direct_vm.sender = direct_alice
         with direct_vm.expect_revert("own published URL"):
-            contract.attest_copy("essay-1", "https://origin.example.org/page")
+            contract.attest_copy("essay-1", ORIGIN)
 
     def test_an_unreadable_page_stores_nothing(self, direct_vm, direct_deploy, direct_alice):
         contract = deploy(direct_deploy)
@@ -190,10 +329,44 @@ class TestAttest:
     def test_works_of_returns_only_that_owner(self, direct_vm, direct_deploy, direct_alice, direct_bob):
         contract = deploy(direct_deploy)
         registered(contract, direct_vm, direct_alice, "a1")
-        direct_vm.sender = direct_bob
-        contract.register_work("b1", "Another title", WORK_TEXT, "https://b.example.org/page")
+        registered(contract, direct_vm, direct_bob, "b1", WORK_TEXT + " A second draft.")
 
         assert contract.works_of(who(direct_alice)) == ["a1"]
         assert contract.works_of(who(direct_bob)) == ["b1"]
         ids = [w["id"] for w in contract.list_works(0, 10)]
         assert ids == ["b1", "a1"]
+
+
+class TestClaim:
+    def test_the_owner_can_claim_a_near_copy(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+        attest(contract, direct_vm, direct_bob, verdict("near_copy", "high"))
+
+        direct_vm.sender = direct_alice
+        out = contract.claim_copy("essay-1", 1)
+        assert out["claimed"] is True
+        assert out["claimed_by"] == who(direct_alice)
+        assert out["claimed_at"] > 0
+
+        work = contract.get_work("essay-1")
+        assert work["claims"] == 1
+        assert contract.attestations_of("essay-1")[0]["claimed"] is True
+
+    def test_only_the_owner_can_claim(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+        attest(contract, direct_vm, direct_bob, verdict("near_copy", "high"))
+
+        direct_vm.sender = direct_bob
+        with direct_vm.expect_revert("only the owner"):
+            contract.claim_copy("essay-1", 1)
+
+    def test_a_clear_finding_cannot_be_claimed(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        registered(contract, direct_vm, direct_alice)
+        attest(contract, direct_vm, direct_alice, verdict("unrelated", "none", ""))
+
+        direct_vm.sender = direct_alice
+        with direct_vm.expect_revert("cannot be claimed"):
+            contract.claim_copy("essay-1", 1)

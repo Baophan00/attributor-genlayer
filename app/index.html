@@ -102,6 +102,11 @@
     border-bottom:1px dotted var(--rule)}
   .links a:hover{color:var(--accent)}
   .fine{font-size:12.5px;color:var(--muted);margin:0}
+  .proof{border:1px dashed var(--rule-ink);background:var(--paper-2);padding:10px 12px;margin-top:12px}
+  .proof code{display:block;font:12px/1.55 var(--mono);color:var(--ink);word-break:break-all;margin:4px 0 2px}
+  .pill.verified{color:#2f5d3b;border-color:#8fae97}
+  .pill.revoked{color:#fff;background:#7a1f14;border-color:#7a1f14}
+  .pill.claimed{color:#2f5d3b;border-color:#8fae97}
   footer{margin-top:40px;border-top:3px double var(--rule-ink);padding-top:10px;
     font:500 10px/1.5 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
     display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
@@ -155,6 +160,14 @@
         <label for="wtitle">Title</label><input id="wtitle" placeholder="Why glossaries fail at midnight" />
         <label for="wtext">Text — 120 to 4000 characters</label>
         <textarea id="wtext" rows="6" placeholder="Paste the text you published."></textarea>
+        <div class="proof">
+          <label style="margin-top:0">Owner proof — add this line to the page, then publish it</label>
+          <code id="proof">connect a key to see the line</code>
+          <div class="actions" style="margin-top:6px">
+            <button type="button" id="copyproof">Copy proof line</button>
+          </div>
+          <p class="fine">The contract fetches the page and checks the text and this line. It proves you could edit the page at registration time. The demo page is owned by the deploy account; for a real registration, publish this line on a page you control.</p>
+        </div>
         <div class="actions">
           <button class="primary" id="register">Register on chain</button>
           <button id="sample">Load a demo text</button>
@@ -175,6 +188,15 @@
           <li>They answer one category and one overlap bucket.</li>
           <li>The round settles only when both agree; wording and excerpt are free.</li>
           <li>The contract maps the pair to a score and a status.</li>
+        </ol>
+      </div>
+      <div class="aside-block">
+        <h4>First publication, then dispute</h4>
+        <ol>
+          <li>Publish the text and the owner proof line on the page.</li>
+          <li>Registration fetches that page and verifies both before writing.</li>
+          <li>A different address can challenge with an earlier page; one round can revoke the record.</li>
+          <li>The owner can claim a near-copy or verbatim finding.</li>
         </ol>
       </div>
       <div class="aside-block links">

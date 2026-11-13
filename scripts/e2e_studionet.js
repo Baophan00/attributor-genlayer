@@ -33,7 +33,10 @@ function keys() {
   return k;
 }
 const k = keys();
-const owner = createAccount(k.owner);
+const DEPLOY_KEYS = path.join(__dirname, ".deploy-keys.json");
+const ownerKey =
+  process.env.ATTRIBUTOR_OWNER_KEY || JSON.parse(fs.readFileSync(DEPLOY_KEYS, "utf8")).owner;
+const owner = createAccount(ownerKey);
 const reviewer = createAccount(k.reviewer);
 const ownerClient = createClient({ chain: studionet, account: owner });
 const reviewerClient = createClient({ chain: studionet, account: reviewer });
@@ -129,6 +132,13 @@ const TEXT = [
     throw new Error(`the near copy was read as ${work.category}/${work.overlap} (${work.status})`);
   }
 
+  console.log("\n[owner] claim the near-copy finding");
+  const claim = await send(ownerClient, "owner", "claim_copy", [workId, 1]);
+  if (claim.refused) throw new Error("the owner could not claim the near-copy finding");
+  const claimed = await read("attestations_of", [workId]);
+  console.log(`  claimed ${claimed[0].claimed} by ${claimed[0].claimed_by}`);
+  if (!claimed[0].claimed) throw new Error("the claim was not stored");
+
   console.log("\n[reviewer] attest_copy against an unrelated page");
   const t1 = Date.now();
   await write(reviewerClient, "reviewer", "attest_copy", [workId, OTHER]);
@@ -153,6 +163,23 @@ const TEXT = [
     throw new Error("a refused register moved the work");
   }
 
+  console.log("\n[reviewer] challenge the record with an unrelated page (negative control)");
+  const challenged = await send(reviewerClient, "reviewer", "challenge_work", [
+    workId,
+    OTHER,
+    "This unrelated page is the original publication of the registered text.",
+  ]);
+  if (challenged.refused) throw new Error("the challenge was refused by the contract");
+  const challenges = await read("challenges_of", [workId]);
+  console.log(JSON.stringify(challenges, null, 2));
+  if (!challenges.length) throw new Error("the challenge was not stored");
+  const afterChallenge = await read("get_work", [workId]);
+  console.log(`  verdict ${challenges[0].verdict} | revoked ${afterChallenge.revoked}`);
+  if (challenges[0].verdict !== "rejected") {
+    throw new Error(`the negative-control challenge was ${challenges[0].verdict}`);
+  }
+  if (afterChallenge.revoked) throw new Error("a rejected challenge revoked the record");
+
   console.log("\nhistory");
   for (const round of await read("attestations_of", [workId])) {
     console.log(
@@ -164,7 +191,7 @@ const TEXT = [
   console.log(JSON.stringify(await read("stats", []), null, 2));
 
   console.log(
-    "\nRESULT: one text registered with its publication time, a near copy read and scored, an unrelated page read as clear, and both the own-URL and the duplicate id refused"
+    "\nRESULT: one text verified against its page and owner proof, a near copy read and claimed, an unrelated page read as clear, a negative-control challenge rejected with the record left standing, and both the own-URL and duplicate id refused"
   );
 })().catch((e) => {
   console.error("\nFAILED:", e.message);
