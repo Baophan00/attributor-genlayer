@@ -64,12 +64,13 @@ A work can be attested many times: pages change, and a later round is a new read
 ## Layout
 
 ```
-contracts/attributor.py             the contract, ~380 lines
-tests/direct/test_attributor.py     14 direct-mode tests in 2 classes
+contracts/attributor.py             the contract, ~700 lines
+tests/direct/test_attributor.py     27 direct-mode tests in 4 classes
 scripts/deploy_studionet.js         deploy with genlayer-js, no CLI
-scripts/e2e_studionet.js            register, two attestations, two guards, on Studio
-app/                                 the page: register, list, attest, history
-app/demo/                            three static pages used by the e2e run
+scripts/e2e_studionet.js            register, two attestations, two guards, one challenge
+scripts/e2e_dispute.js              a false record challenged, revoked, re-registered by its author
+app/                                 the page: register, list, attest, challenge, history
+app/demo/                            five static pages used by the two runs
 ```
 
 ## Live
@@ -78,7 +79,7 @@ app/demo/                            three static pages used by the e2e run
 - Contract (Studio Network): `0x1Ebb54c18e83F980f004E2FD1eCFc352d769eE75`
 - Explorer: https://explorer-studio.genlayer.com/address/0x1Ebb54c18e83F980f004E2FD1eCFc352d769eE75
 
-## One registration, two readings, one claim, one challenge on the live contract
+## Two runs on the live contract
 
 The demo pages are published on the same host as the app. The registered text is on `/demo/work.html` and carries the owner proof line for the deploy account. The first attestation reads `/demo/copy.html`, a page that keeps the argument and rewrites the sentences; the second reads `/demo/unrelated.html`, a page about sourdough; the challenge uses that unrelated page as a negative control.
 
@@ -93,7 +94,24 @@ The demo pages are published on the same host as the app. The registered text is
 | the same work id again — refused, the work did not move | `0x2457ae5acb251855be29bd0f3b49ec3fa9413f0e67ac99c34348219aacc4a07a` |
 | `challenge_work` with an unrelated page — `rejected`, the record stays | `0x3853720da4f56adce66bdd0015cc89071ee0a7ee5a40131534305f588fa6044a` |
 
-The live challenge is a negative control: the validators reject an unrelated page and the record stays. The `upheld` branch (revoke and free the text digest) is covered by `test_a_stranger_can_revoke_a_false_record` and `test_a_revoked_work_frees_the_text_for_the_real_author` in the direct suite. The distinction is deliberate: a self-claimed earlier date is not enough to revoke a record, and the contract records that refusal instead of pretending the dispute was proven.
+The first challenge is a negative control: the validators reject an unrelated page and the record stays. A self-claimed earlier date is not enough to revoke anything, and the contract records the refusal instead of pretending the dispute was proven.
+
+### The dispute that succeeds
+
+A second run registers a false record and takes it apart. The owner registers *The quiet machine* at `/demo/quiet-claim.html`, published 16 November 2026, with their proof line. The same text had appeared on 8 February 2024 at `/demo/quiet-first.html`, an archived issue carrying another byline and the challenger's proof line. The challenger files that page as evidence.
+
+| what | transaction |
+| --- | --- |
+| `register_work` — the false record, text + proof verified, 971 characters | `0xde63602f00313b0c9d34e284960b2c4ba83bdd31b2cddfc9e4663ff7572ac528` |
+| `challenge_work` with the February 2024 page — **upheld**, the record is revoked | `0xe28f5f1a213e4a32719ad874b2c71fc9371904acb0df46c4019dfeddc0faeecd` |
+| attesting the revoked record — refused | `0x1a7524ad2c9455926f2c9f69e681de1ca15f7b9e3381f120478d35b2821457bc` |
+| `register_work` by the challenger at the page where the text really appeared first — verified | `0xf70f7bb2a9ce2a19051a7f73442e755d62e70a2a8e0a2984fc63aef381507f36` |
+
+The round's note, stored with the challenge:
+
+> The evidence page reproduces the same text with an Ines Moreau byline, an 8 February 2024 publication date, and an Issue 14 archive path at /archive/issue-14/the-quiet-machine.
+
+So the whole path is live, not only in the suite: a record is revoked by a round the challenger pays for, the digest is freed, and the text goes back to the author who can prove it at the earlier page. After the run the contract reports `works 3, revoked 1, attestations 2`.
 
 The first round quoted a verbatim span from the copy ("it keeps the words and loses the decisions") and the second found nothing to quote. Both rounds stored what the validators reported; the score and the status were computed from the pair:
 
